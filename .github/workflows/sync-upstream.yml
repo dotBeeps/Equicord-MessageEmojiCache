@@ -1,0 +1,120 @@
+name: Sync upstream
+
+on:
+  schedule:
+    - cron: "0 9 * * 1" # Weekly, Monday 9am UTC
+  workflow_dispatch:
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/Equicord/Equicord.git
+
+      - name: Fetch upstream
+        run: git fetch upstream main
+
+      - name: Check for new commits
+        id: check
+        run: |
+          COUNT=$(git rev-list HEAD..upstream/main --count)
+          echo "new_commits=$COUNT" >> $GITHUB_OUTPUT
+          echo "Upstream is $COUNT commits ahead"
+
+      - name: Exit early if already up to date
+        if: steps.check.outputs.new_commits == '0'
+        run: echo "Nothing to do." && exit 0
+
+      - uses: pnpm/action-setup@v3
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Attempt merge and build
+        id: auto
+        run: |
+          if git merge upstream/main --no-edit; then
+            echo "merge_ok=true" >> $GITHUB_OUTPUT
+          else
+            echo "merge_ok=false" >> $GITHUB_OUTPUT
+            git merge --abort
+            exit 0
+          fi
+
+          pnpm install --frozen-lockfile
+
+          if pnpm build; then
+            echo "build_ok=true" >> $GITHUB_OUTPUT
+          else
+            echo "build_ok=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Push clean sync
+        if: steps.auto.outputs.merge_ok == 'true' && steps.auto.outputs.build_ok == 'true'
+        run: git push origin main
+
+      - name: Collect failure context for Claude
+        id: ctx
+        if: steps.auto.outputs.merge_ok != 'true' || steps.auto.outputs.build_ok != 'true'
+        run: |
+          git reset --hard HEAD
+
+          {
+            echo "upstream_log<<EOF"
+            git log HEAD..upstream/main --oneline | head -30
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
+
+          {
+            echo "plugin_diff<<EOF"
+            git diff HEAD upstream/main -- src/userplugins/richNotify/ | head -400
+            echo "EOF"
+          } >> $GITHUB_OUTPUT
+
+          echo "merge_failed=${{ steps.auto.outputs.merge_ok != 'true' }}" >> $GITHUB_OUTPUT
+          echo "build_failed=${{ steps.auto.outputs.build_ok != 'true' }}" >> $GITHUB_OUTPUT
+
+      - name: Ask Claude to fix and open a PR
+        if: steps.auto.outputs.merge_ok != 'true' || steps.auto.outputs.build_ok != 'true'
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            This is dot's Equicord fork. The custom plugin lives at `src/userplugins/richNotify/` (index.ts + native.ts).
+
+            An automated upstream sync from Equicord/Equicord just failed:
+            - Merge failed: ${{ steps.ctx.outputs.merge_failed }}
+            - Build failed: ${{ steps.ctx.outputs.build_failed }}
+
+            Recent upstream commits:
+            ${{ steps.ctx.outputs.upstream_log }}
+
+            Plugin diff vs upstream:
+            ${{ steps.ctx.outputs.plugin_diff }}
+
+            Please:
+            1. Run: git remote add upstream https://github.com/Equicord/Equicord.git
+            2. Fetch and merge upstream/main, resolving any conflicts
+            3. Fix whatever broke in src/userplugins/richNotify/ — read CLAUDE.md at the repo root for all rules
+            4. Run `pnpm build` to confirm it passes
+            5. Open a PR titled "chore: sync upstream + fix RichNotify" targeting main
+
+            Key rules from CLAUDE.md:
+            - Never use `any` for Discord objects — import proper types from @vencord/discord-types
+            - Minimal change — fix only what broke, no refactoring
+            - No new comments added to existing code
