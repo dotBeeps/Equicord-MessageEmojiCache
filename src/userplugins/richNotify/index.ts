@@ -339,27 +339,6 @@ export default definePlugin({
             icon,
             message,
         }: RpcNotificationDispatch) {
-            logger.info("=== RPC_NOTIFICATION_CREATE ===");
-            logger.info("body (first 200):", body?.slice(0, 200));
-            logger.info("message present:", !!message);
-            if (message) {
-                logger.info("message keys:", Object.keys(message).join(", "));
-                logger.info("message.content (first 200):", message.content?.slice(0, 200));
-                logger.info("sticker_items:", JSON.stringify(message.sticker_items));
-                logger.info("sticker_items:", JSON.stringify((message as any).sticker_items));
-                logger.info("attachments count:", message.attachments?.length ?? 0);
-                if (message.attachments?.[0]) {
-                    logger.info("first attachment:", JSON.stringify({
-                        content_type: message.attachments[0].content_type,
-                        proxy_url: message.attachments[0].proxy_url?.slice(0, 100),
-                    }));
-                }
-                logger.info("embeds count:", message.embeds?.length ?? 0);
-                if (message.embeds?.[0]) {
-                    logger.info("first embed image:", message.embeds[0].image?.url?.slice(0, 100));
-                    logger.info("first embed thumbnail:", message.embeds[0].thumbnail?.url?.slice(0, 100));
-                }
-            }
             const size = settings.store.emojiSize;
             const content = message?.content ?? body;
             const emojis = extractEmojis(content, size);
@@ -369,12 +348,6 @@ export default definePlugin({
                 emojis,
                 bodyHtml,
             );
-
-            logger.info("extracted emojis:", emojis.length, emojis[0] ? JSON.stringify(emojis[0]) : "none");
-            logger.info("bodyHtml (first 200):", bodyHtml.slice(0, 200));
-            logger.info("hint keys:", Object.keys(hints).join(", "));
-            if (hints["x-quickshell-sticker"]) logger.info("sticker hint:", hints["x-quickshell-sticker"]);
-            if (hints["x-quickshell-emojis"]) logger.info("emojis hint (first 200):", hints["x-quickshell-emojis"].slice(0, 200));
 
             try {
                 await Native.sendNotification({
